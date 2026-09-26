@@ -37,7 +37,8 @@
   src="https://script.google.com/macros/s/AKfycbyM0K0SyM6Ga4Axa_J_PqlIJTyTvGLISzVpidAZBU7W2WMtpsZDIMsXS7OxnvDXY7TXcA/exec"></iframe>
 <script>
   // The board runs inside Google's sandbox and asks this page to remember its device key,
-  // because a phone can clear storage that belongs to an embedded page. Only Apps Script's
+  // because a phone can clear storage that belongs to an embedded page. It also asks for a reload
+  // after a new board version is published. Only Apps Script's
   // sandbox origin is answered, and only with the key it saved here.
   const KEY = 'hb.token';
   const SANDBOX = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
@@ -47,6 +48,14 @@
     try {
       if (e.data.type === 'hb-get-token') value = localStorage.getItem(KEY);
       if (e.data.type === 'hb-save-token') { if (e.data.token) localStorage.setItem(KEY, String(e.data.token)); else localStorage.removeItem(KEY); value = true; }
+      // A new board version was published: reload the board frame (at most once a minute, so it can never loop).
+      if (e.data.type === 'hb-reload') {
+        const last = Number(sessionStorage.getItem('hb.reloadedAt') || 0);
+        if (Date.now() - last > 60000) {
+          sessionStorage.setItem('hb.reloadedAt', String(Date.now())); value = true;
+          setTimeout(() => { const f = document.getElementById('board'); f.src = f.src; }, 200);
+        }
+      }
     } catch (err) { value = null; }
     e.source.postMessage({ id: e.data.id, value }, e.origin);
   });
