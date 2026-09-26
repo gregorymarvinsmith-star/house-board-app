@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>House Board</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="House Board">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1A2427" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<style>
+  :root { --bg: #F3F6F5; --ink: #5F6E73; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121A1C; --ink: #95A5A8; color-scheme: dark; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); }
+  body {
+    box-sizing: border-box; display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    font: 14px system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink);
+  }
+  iframe { flex: 1; width: 100%; border: 0; display: block; background: var(--bg); }
+  .loading { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; transition: opacity .3s; }
+  .loading img { width: 72px; height: 72px; border-radius: 16px; }
+  .loading.gone { opacity: 0; }
+  @media (prefers-reduced-motion: reduce) { .loading { transition: none; } }
+</style>
+</head>
+<body>
+<div class="loading" id="loading" aria-hidden="true"><img src="icons/icon-192.png" alt=""></div>
+<iframe id="board" title="House Board" allow="clipboard-write; screen-wake-lock"
+  src="https://script.google.com/macros/s/AKfycbyM0K0SyM6Ga4Axa_J_PqlIJTyTvGLISzVpidAZBU7W2WMtpsZDIMsXS7OxnvDXY7TXcA/exec"></iframe>
+<script>
+  // The board runs inside Google's sandbox and asks this page to remember its device key,
+  // because a phone can clear storage that belongs to an embedded page. Only Apps Script's
+  // sandbox origin is answered, and only with the key it saved here.
+  const KEY = 'hb.token';
+  const SANDBOX = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
+  addEventListener('message', e => {
+    if (!SANDBOX.test(e.origin) || !e.data || typeof e.data.id !== 'string') return;
+    let value = null;
+    try {
+      if (e.data.type === 'hb-get-token') value = localStorage.getItem(KEY);
+      if (e.data.type === 'hb-save-token') { if (e.data.token) localStorage.setItem(KEY, String(e.data.token)); else localStorage.removeItem(KEY); value = true; }
+    } catch (err) { value = null; }
+    e.source.postMessage({ id: e.data.id, value }, e.origin);
+  });
+  document.getElementById('board').addEventListener('load', () => {
+    setTimeout(() => document.getElementById('loading').classList.add('gone'), 400);
+  });
+</script>
+</body>
+</html>
