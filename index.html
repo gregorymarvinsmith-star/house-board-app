@@ -29,23 +29,85 @@
   .loading img { width: 72px; height: 72px; border-radius: 16px; }
   .loading.gone { opacity: 0; }
   @media (prefers-reduced-motion: reduce) { .loading { transition: none; } }
+  /* The "Turn on alerts" bar: an iPhone only lets a tap on this page (not the board inside it) ask for notifications */
+  .pushbar { --surface: #FFFFFF; --text: #172226; --muted: #5F6E73; --line: #D3DCDA; --accent: #24597F; --accent-ink: #FFFFFF;
+    position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 5;
+    max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.18); font-size: 15px; line-height: 1.35; }
+  @media (prefers-color-scheme: dark) { .pushbar { --surface: #1A2427; --text: #E4EBE9; --muted: #95A5A8; --line: #2B3B3F; --accent: #7FB2D9; --accent-ink: #0E1A22; } }
+  .pushbar[hidden] { display: none; }
+  .pushbar p { margin: 0; }
+  .pushbar div { display: flex; gap: 8px; justify-content: flex-end; }
+  .pushbar button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 9px 14px; background: none; color: var(--muted); }
+  .pushbar button.yes { background: var(--accent); color: var(--accent-ink); }
 </style>
 </head>
 <body>
 <div class="loading" id="loading" aria-hidden="true"><img src="icons/icon-192.png" alt=""></div>
 <iframe id="board" title="House Board" allow="clipboard-write; screen-wake-lock"
   src="https://script.google.com/macros/s/AKfycbyM0K0SyM6Ga4Axa_J_PqlIJTyTvGLISzVpidAZBU7W2WMtpsZDIMsXS7OxnvDXY7TXcA/exec"></iframe>
+<div class="pushbar" id="pushbar" role="dialog" aria-label="Alerts" hidden>
+  <p>🔔 Get an alert on this phone when someone writes in the House chat.</p>
+  <div><button type="button" id="pushNo">Not now</button><button type="button" class="yes" id="pushYes">Turn on</button></div>
+</div>
 <script>
   // The board runs inside Google's sandbox and asks this page to remember its device key,
   // because a phone can clear storage that belongs to an embedded page. It also asks for a reload
-  // after a new board version is published. Only Apps Script's
+  // after a new board version is published, and for alerts on this phone (below). Only Apps Script's
   // sandbox origin is answered, and only with the key it saved here.
   const KEY = 'hb.token';
   const SANDBOX = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
-  addEventListener('message', e => {
+  // Alerts on this phone. The board asks what this phone can do ("hb-push-state") and to show the Turn on alerts bar
+  // ("hb-push-offer", with the board's public key, only for people it offers alerts to); it gets back the phone's
+  // sign-up and saves it itself. sw.js shows the alerts. Nothing about the family is stored here.
+  const $id = id => document.getElementById(id);
+  const canPush = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  let swReg = null;
+  const swReady = !('serviceWorker' in navigator) ? Promise.resolve(null)
+    : navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(r => (swReg = r)).catch(() => null);
+  const keyBytes = k => Uint8Array.from(atob(k.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - k.length % 4) % 4)), c => c.charCodeAt(0));
+  const NOT_NOW = 'hb.pushNotNow', NOT_NOW_DAYS = 14;
+  let pushWaiting = null; // the board's open "hb-push-offer", answered when the person taps
+  async function pushState() {
+    if (!canPush()) return { supported: false };
+    const reg = await swReady;
+    if (!reg) return { supported: false };
+    const sub = await reg.pushManager.getSubscription();
+    return { supported: true, permission: Notification.permission, sub: sub ? sub.toJSON() : null };
+  }
+  function pushOffer(data, reply) {
+    let last = 0; try { last = Number(localStorage.getItem(NOT_NOW) || 0); } catch (err) {}
+    if (!canPush() || (!data.force && Date.now() - last < NOT_NOW_DAYS * 864e5)) return reply({ dismissed: true });
+    if (pushWaiting) pushWaiting.reply({ dismissed: true });
+    pushWaiting = { reply, key: String(data.key || '') };
+    swReady.then(reg => {
+      if (reg && pushWaiting) $id('pushbar').hidden = false;
+      else if (pushWaiting) { pushWaiting.reply({ dismissed: true }); pushWaiting = null; }
+    });
+  }
+  $id('pushNo').addEventListener('click', () => {
+    $id('pushbar').hidden = true;
+    try { localStorage.setItem(NOT_NOW, String(Date.now())); } catch (err) {}
+    if (pushWaiting) { pushWaiting.reply({ dismissed: true }); pushWaiting = null; }
+  });
+  $id('pushYes').addEventListener('click', () => {
+    $id('pushbar').hidden = true;
+    const w = pushWaiting; pushWaiting = null;
+    if (!w || !swReg) return;
+    // subscribe() straight from the tap (no await before it): that tap is what lets the iPhone show its Allow prompt
+    swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(w.key) })
+      .then(sub => w.reply({ sub: sub.toJSON() }))
+      .catch(err => w.reply(Notification.permission === 'denied' ? { denied: true } : { dismissed: true, error: String(err && err.message || err) }));
+  });
+
+  addEventListener('message', async e => {
     if (!SANDBOX.test(e.origin) || !e.data || typeof e.data.id !== 'string') return;
+    const reply = value => e.source.postMessage({ id: e.data.id, value }, e.origin);
     let value = null;
     try {
+      if (e.data.type === 'hb-push-state') return reply(await pushState());
+      if (e.data.type === 'hb-push-offer') return pushOffer(e.data, reply);
       if (e.data.type === 'hb-get-token') value = localStorage.getItem(KEY);
       if (e.data.type === 'hb-save-token') { if (e.data.token) localStorage.setItem(KEY, String(e.data.token)); else localStorage.removeItem(KEY); value = true; }
       // A new board version was published: reload the board frame (at most once a minute, so it can never loop).
@@ -53,11 +115,11 @@
         const last = Number(sessionStorage.getItem('hb.reloadedAt') || 0);
         if (Date.now() - last > 60000) {
           sessionStorage.setItem('hb.reloadedAt', String(Date.now())); value = true;
-          setTimeout(() => { const f = document.getElementById('board'); f.src = f.src; }, 200);
+          setTimeout(() => { const f = $id('board'); f.src = f.src; }, 200);
         }
       }
     } catch (err) { value = null; }
-    e.source.postMessage({ id: e.data.id, value }, e.origin);
+    reply(value);
   });
   document.getElementById('board').addEventListener('load', () => {
     setTimeout(() => document.getElementById('loading').classList.add('gone'), 400);
